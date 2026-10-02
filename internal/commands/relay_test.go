@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,8 +43,10 @@ type fakeCar struct {
 	// alone cannot distinguish auto_conditioning_start from _stop, so without it no
 	// test can assert WHICH command a payload produced. Empty when nothing was sent.
 	lastCommand atomic.Value // string
-	proxy       *httptest.Server
-	fleet       *httptest.Server
+	// lastBody is the JSON body of that command, for asserting its arguments.
+	lastBody atomic.Value // string
+	proxy    *httptest.Server
+	fleet    *httptest.Server
 }
 
 func newFakeCar() *fakeCar {
@@ -58,6 +61,8 @@ func newFakeCar() *fakeCar {
 	proxyMux.HandleFunc("POST /api/1/vehicles/{vin}/command/{name}", func(w http.ResponseWriter, req *http.Request) {
 		f.commandCalls.Add(1)
 		f.lastCommand.Store(req.PathValue("name"))
+		body, _ := io.ReadAll(req.Body)
+		f.lastBody.Store(string(body))
 		if !f.awake.Load() {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(w, `{"response":null,"error":"vehicle unavailable: vehicle is offline or asleep","error_description":""}`)
@@ -294,5 +299,40 @@ func TestClimateModeAcceptsAdvertisedVocabulary(t *testing.T) {
 	r.Handle("VIN1", "climate_mode", "banana")
 	if got := f.lastCommand.Load(); got != "" {
 		t.Errorf("unknown payload %q issued %v; it must issue nothing", "banana", got)
+	}
+}
+
+// Cabin overheat protection has three modes in the app: Off, No A/C and On (A/C).
+// The command writes on/off AND the mode, so a gateway that only ever sent
+// fan_only=false reset No A/C to A/C every time it armed the feature.
+func TestCabinOverheatFanOnly(t *testing.T) {
+	fastWake(t)
+	f := newFakeCar()
+	defer f.close()
+	f.awake.Store(true)
+
+	r := f.relay()
+
+	cases := []struct {
+		payload string
+		want    map[string]any
+	}{
+		{"FAN_ONLY", map[string]any{"on": true, "fan_only": true}},
+		{" fan_only ", map[string]any{"on": true, "fan_only": true}},
+		{"ON", map[string]any{"on": true, "fan_only": false}},
+		{"OFF", map[string]any{"on": false, "fan_only": false}},
+	}
+	for _, c := range cases {
+		f.lastBody.Store("")
+		r.Handle("VIN1", "cabin_overheat", c.payload)
+		var got map[string]any
+		if err := json.Unmarshal([]byte(f.lastBody.Load().(string)), &got); err != nil {
+			t.Fatalf("payload %q: body %q: %v", c.payload, f.lastBody.Load(), err)
+		}
+		for k, v := range c.want {
+			if got[k] != v {
+				t.Errorf("payload %q sent %s=%v, want %v", c.payload, k, got[k], v)
+			}
+		}
 	}
 }

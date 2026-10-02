@@ -411,12 +411,20 @@ func (r *Relay) Handle(vin, key, payload string) (res Result) {
 		}
 		err = r.command(vin, "remote_steering_wheel_heater_request", map[string]any{"on": on})
 	case "cabin_overheat":
-		on, ok := onOff(payload)
-		if !ok {
-			bad("ON/OFF")
-			return
+		// set_cabin_overheat_protection always writes the mode as well as on/off, so
+		// ON (fan_only false) switches a car the owner set to "No A/C" back to A/C.
+		// FAN_ONLY arms it in No A/C mode; ON keeps its old meaning.
+		var on, fanOnly bool
+		if strings.EqualFold(strings.TrimSpace(payload), "fan_only") {
+			on, fanOnly = true, true
+		} else {
+			var ok bool
+			if on, ok = onOff(payload); !ok {
+				bad("ON/OFF/FAN_ONLY")
+				return
+			}
 		}
-		err = r.command(vin, "set_cabin_overheat_protection", map[string]any{"on": on, "fan_only": false})
+		err = r.command(vin, "set_cabin_overheat_protection", map[string]any{"on": on, "fan_only": fanOnly})
 	case "preconditioning_max":
 		on, ok := onOff(payload)
 		if !ok {

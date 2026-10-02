@@ -60,6 +60,8 @@ func TestHandle_RejectsUnrecognizedPayloads(t *testing.T) {
 		{"valet", "OFF", "set_valet_mode"},
 		{"valet", "0", "set_valet_mode"},
 		{"valet", "maybe", ""},
+		{"cabin_overheat", "FAN_ONLY", "set_cabin_overheat_protection"},
+		{"cabin_overheat", "fan", ""},
 		// climate_mode used to start the climate for ANY payload but "off"
 		{"climate_mode", "ON", "auto_conditioning_start"},
 		{"climate_mode", "OFF", "auto_conditioning_stop"},
